@@ -1,0 +1,94 @@
+# ═══════════════════════════════════════════
+#  eMunicipalitate — Application Configuration
+# ═══════════════════════════════════════════
+
+spring:
+  profiles:
+    active: dev
+  application:
+    name: emunicipalitate
+
+  # ── Database ──
+  datasource:
+    url: jdbc:postgresql://localhost:5432/emunicipalitate
+    username: emunicipalitate
+    password: changeme_dev
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: true
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+  # ── Redis ──
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      password: changeme_dev
+
+  # ── RabbitMQ ──
+  rabbitmq:
+    host: localhost
+    port: 5672
+    username: emunicipalitate
+    password: changeme_dev
+
+  # ── File Upload ──
+  servlet:
+    multipart:
+      max-file-size: 20MB
+      max-request-size: 25MB
+
+# ── Server ──
+server:
+  port: 8080
+  servlet:
+    context-path: /api
+
+# ── JWT ──
+app:
+  jwt:
+    secret: CHANGE_ME_IN_PRODUCTION_USE_256_BIT_KEY_HERE_1234567890
+    access-token-expiration-ms: 1800000   # 30 minutes
+    refresh-token-expiration-ms: 86400000 # 24 hours
+
+  # ── MinIO ──
+  minio:
+    endpoint: http://localhost:9000
+    access-key: minioadmin
+    secret-key: changeme_dev
+    bucket-name: emunicipalitate-documents
+
+  # ── Signing / DSS ──
+  signing:
+    tsa-url: http://timestamp.digicert.com
+    ocsp-enabled: true
+
+  # ── PKCS#11 (OpenSC) ──
+  pkcs11:
+    library-path: /usr/lib/opensc-pkcs11.so
+    slot-index: 0
+
+# ── Actuator ──
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: when-authorized
+
+# ── Logging ──
+logging:
+  level:
+    ro.emunicipalitate: DEBUG
+    org.springframework.security: INFO
+    eu.europa.ec.joinup.sd.dss: INFO
