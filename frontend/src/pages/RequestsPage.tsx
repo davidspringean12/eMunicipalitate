@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import { requestsApi } from '../services/api';
 
 type RequestData = {
@@ -192,9 +193,9 @@ export default function RequestsPage() {
                       </td>
                       <td>{new Date(req.createdAt).toLocaleString('ro-RO')}</td>
                       <td>
-                        <button className="btn btn-outline" style={{ marginRight: '4px', fontSize: '0.8rem', padding: '4px 8px' }}>
+                        <Link to={`/requests/${req.id}`} className="btn btn-outline" style={{ marginRight: '4px', fontSize: '0.8rem', padding: '4px 8px', textDecoration: 'none' }}>
                           Detalii
-                        </button>
+                        </Link>
                         {req.status === 'APPROVED' && (
                           <a href={`/sign/${req.id}`} className="btn btn-success" style={{ fontSize: '0.8rem', padding: '4px 8px' }}>
                             ✍️ Semnează
