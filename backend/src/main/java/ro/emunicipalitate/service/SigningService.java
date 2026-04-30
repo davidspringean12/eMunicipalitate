@@ -12,6 +12,7 @@ import eu.europa.esig.dss.pades.signature.PAdESService;
 import eu.europa.esig.dss.service.tsp.OnlineTSPSource;
 import eu.europa.esig.dss.spi.validation.CommonCertificateVerifier;
 import lombok.RequiredArgsConstructor;
+import org.springframework.core.env.Environment;
 import lombok.extern.slf4j.Slf4j;
 import org.bouncycastle.asn1.x500.RDN;
 import org.bouncycastle.asn1.x500.X500Name;
@@ -66,6 +67,7 @@ public class SigningService {
     private final AuditService auditService;
     private final CommonCertificateVerifier certificateVerifier;
     private final OnlineTSPSource onlineTSPSource;
+    private final Environment environment;
 
     @Value("${app.minio.bucket-name}")
     private String bucketName;
@@ -184,11 +186,13 @@ public class SigningService {
 
             User signerUser = userRepository.findById(userId)
                     .orElseThrow(() -> new NoSuchElementException("Signer not found: " + userId));
+            boolean isDevProfile = Arrays.asList(environment.getActiveProfiles()).contains("dev");
+            String sigLevel = isDevProfile ? "PAdES_BASELINE_B" : "PAdES_B_LTA";
 
             Signature signature = signatureRepository.save(Signature.builder()
                     .document(doc)
                     .signer(signerUser)
-                    .signatureLevel("PAdES_B_LTA")
+                    .signatureLevel(sigLevel)
                     .signerCn(signerCn)
                     .signerCnp(signerCnp)
                     .certIssuer(cert.getIssuerX500Principal().getName())
@@ -259,16 +263,86 @@ public class SigningService {
         byte[] pdfBytes = objectStream.readAllBytes();
         DSSDocument pdfDocument = new InMemoryDocument(pdfBytes, doc.getFilename());
 
+        // Detect dev mode — use B level (no TSA/OCSP required) for self-signed certs
+        boolean isDevProfile = Arrays.asList(environment.getActiveProfiles()).contains("dev");
+        SignatureLevel level = isDevProfile
+                ? SignatureLevel.PAdES_BASELINE_B
+                : SignatureLevel.PAdES_BASELINE_LTA;
+
         // Configure PAdES signature parameters
         PAdESSignatureParameters parameters = new PAdESSignatureParameters();
-        parameters.setSignatureLevel(SignatureLevel.PAdES_BASELINE_LTA);
+        parameters.setSignatureLevel(level);
         parameters.setSignaturePackaging(SignaturePackaging.ENVELOPED);
         parameters.setDigestAlgorithm(DigestAlgorithm.SHA256);
         parameters.setSigningCertificate(new CertificateToken(signerCert));
 
-        // Initialize the PAdES service with certificate verifier and TSA
-        PAdESService padesService = new PAdESService(certificateVerifier);
-        padesService.setTspSource(onlineTSPSource);
+        // ── Visible signature annotation ──
+        // Renders a stamp on the first page so the signature is visible in ALL PDF viewers
+        eu.europa.esig.dss.pades.SignatureImageParameters imageParams =
+                new eu.europa.esig.dss.pades.SignatureImageParameters();
+
+        // Position: bottom-right of first page
+        eu.europa.esig.dss.pades.SignatureFieldParameters fieldParams =
+                new eu.europa.esig.dss.pades.SignatureFieldParameters();
+        fieldParams.setPage(1);
+        fieldParams.setOriginX(320);
+        fieldParams.setOriginY(30);
+        fieldParams.setWidth(250);
+        fieldParams.setHeight(80);
+        imageParams.setFieldParameters(fieldParams);
+
+        // Text content
+        eu.europa.esig.dss.pades.SignatureImageTextParameters textParams =
+                new eu.europa.esig.dss.pades.SignatureImageTextParameters();
+
+        String signerName = signerCert.getSubjectX500Principal().getName();
+        // Extract CN from the full X500 name
+        String cn = signerName;
+        for (String part : signerName.split(",")) {
+            if (part.trim().startsWith("CN=")) {
+                cn = part.trim().substring(3);
+                break;
+            }
+        }
+        java.time.LocalDateTime now = java.time.LocalDateTime.now();
+        String timestamp = now.format(java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm:ss"));
+
+        textParams.setText(
+                "SEMNAT ELECTRONIC de:\n" +
+                cn + "\n" +
+                "Data: " + timestamp + "\n" +
+                "Nivel: " + level.name().replace("PAdES_", "PAdES-")
+        );
+        textParams.setTextColor(java.awt.Color.DARK_GRAY);
+        textParams.setBackgroundColor(new java.awt.Color(245, 245, 245));
+        textParams.setSignerTextPosition(
+                eu.europa.esig.dss.enumerations.SignerTextPosition.RIGHT);
+        textParams.setSignerTextHorizontalAlignment(
+                eu.europa.esig.dss.enumerations.SignerTextHorizontalAlignment.LEFT);
+        textParams.setPadding(8);
+
+        imageParams.setTextParameters(textParams);
+        parameters.setImageParameters(imageParams);
+
+        // Build a certificate verifier appropriate for the profile
+        CommonCertificateVerifier verifier;
+        if (isDevProfile) {
+            // In dev mode, trust the self-signed certificate and skip revocation checks
+            verifier = new CommonCertificateVerifier();
+            eu.europa.esig.dss.spi.x509.CommonTrustedCertificateSource trustedSource =
+                    new eu.europa.esig.dss.spi.x509.CommonTrustedCertificateSource();
+            trustedSource.addCertificate(new CertificateToken(signerCert));
+            verifier.setTrustedCertSources(trustedSource);
+            log.info("DEV mode: using PAdES-BASELINE-B with self-signed trust");
+        } else {
+            verifier = certificateVerifier;
+        }
+
+        // Initialize the PAdES service
+        PAdESService padesService = new PAdESService(verifier);
+        if (!isDevProfile) {
+            padesService.setTspSource(onlineTSPSource);
+        }
 
         // Wrap the externally-produced signature value from the CEI
         SignatureValue signatureValue = new SignatureValue();
@@ -276,12 +350,12 @@ public class SigningService {
                 eu.europa.esig.dss.enumerations.SignatureAlgorithm.RSA_SHA256);
         signatureValue.setValue(signatureBytes);
 
-        // Sign the document (embeds signature, timestamp, and revocation data)
+        // Sign the document (embeds signature + optional timestamp/revocation data)
         DSSDocument signedDocument = padesService.signDocument(
                 pdfDocument, parameters, signatureValue);
 
-        log.info("PAdES-B-LTA signature embedded: file={}, cert={}",
-                doc.getFilename(), signerCert.getSubjectX500Principal().getName());
+        log.info("PAdES-{} signature embedded: file={}, cert={}",
+                level.name(), doc.getFilename(), signerCert.getSubjectX500Principal().getName());
 
         return signedDocument.openStream().readAllBytes();
     }

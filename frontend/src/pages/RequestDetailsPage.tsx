@@ -152,8 +152,15 @@ export default function RequestDetailsPage() {
       setSelectedFile(null);
       setActionMessage('Documentul a fost încărcat cu succes!');
       fetchData();
-    } catch {
-      setActionMessage('Eroare la încărcarea documentului.');
+    } catch (err: unknown) {
+      let msg = 'Eroare la încărcarea documentului.';
+      if (err && typeof err === 'object' && 'response' in err) {
+        const axErr = err as { response?: { data?: { message?: string; error?: string }; status?: number } };
+        const detail = axErr.response?.data?.message || axErr.response?.data?.error || '';
+        msg += ` [${axErr.response?.status}] ${detail}`;
+      }
+      setActionMessage(msg);
+      console.error('Upload error:', err);
     } finally {
       setUploading(false);
     }
@@ -360,8 +367,9 @@ export default function RequestDetailsPage() {
                 </div>
               )}
 
-              {/* Upload section — only for DRAFT requests by citizens */}
-              {isCitizen && request.status === 'DRAFT' && (
+              {/* Upload section — citizens in DRAFT/APPROVED, clerks in UNDER_REVIEW */}
+              {((isCitizen && (request.status === 'DRAFT' || request.status === 'APPROVED')) ||
+                (isClerk && request.status === 'UNDER_REVIEW')) && (
                 <div style={{
                   marginTop: '16px', paddingTop: '16px',
                   borderTop: '1px solid var(--color-border)',

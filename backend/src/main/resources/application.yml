@@ -51,6 +51,9 @@ server:
   port: 8080
   servlet:
     context-path: /api
+  error:
+    include-message: always
+    include-exception: true
 
 # ── JWT ──
 app:

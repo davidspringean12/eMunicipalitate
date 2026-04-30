@@ -21,9 +21,16 @@ public interface AuditLogRepository extends JpaRepository<AuditLog, Long> {
 
     Page<AuditLog> findByCreatedAtBetween(Instant from, Instant to, Pageable pageable);
 
-    /** Returns the most recent audit entry — needed to build the hash chain. */
-    @Query("SELECT a FROM AuditLog a ORDER BY a.id DESC LIMIT 1")
-    Optional<AuditLog> findLatestEntry();
+    /** Returns the hash of the most recent audit entry — needed to build the hash chain.
+     *  Uses a native query to avoid loading the full entity (which would cause JSONB dirty-check issues). */
+    @Query(value = "SELECT entry_hash FROM audit_logs ORDER BY id DESC LIMIT 1", nativeQuery = true)
+    Optional<String> findLatestEntryHash();
 
     long countByEventTypeAndEventSubtype(EventType eventType, String eventSubtype);
+
+    /** Update ONLY the entry_hash column — avoids full-row update that triggers JSONB comparison in the audit trigger */
+    @org.springframework.data.jpa.repository.Modifying
+    @Query(value = "UPDATE audit_logs SET entry_hash = :hash WHERE id = :id", nativeQuery = true)
+    void updateEntryHash(@org.springframework.data.repository.query.Param("id") Long id,
+                         @org.springframework.data.repository.query.Param("hash") String hash);
 }

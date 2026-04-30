@@ -2,7 +2,6 @@ import axios from 'axios';
 
 const api = axios.create({
   baseURL: '/api',
-  headers: { 'Content-Type': 'application/json' },
 });
 
 // Attach JWT token to every request if present
@@ -52,9 +51,7 @@ export const documentsApi = {
     const formData = new FormData();
     formData.append('file', file);
     formData.append('requestId', requestId);
-    return api.post('/documents/upload', formData, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    });
+    return api.post('/documents/upload', formData);
   },
   findByRequest: (requestId: string) => api.get(`/documents/request/${requestId}`),
   download: (id: string) => api.get(`/documents/${id}/download`, { responseType: 'blob' }),
@@ -65,6 +62,7 @@ export const signingApi = {
   initiate: (documentId: string) => api.post('/sign/initiate', { documentId }),
   complete: (data: { signSessionId: string; signatureValue: string; qesCertificate: string }) =>
     api.post('/sign/complete', data),
+  devSign: (documentId: string) => api.post('/sign/dev-sign', { documentId }),
 };
 
 export default api;

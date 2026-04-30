@@ -47,9 +47,8 @@ public class AuditService {
                            String ipAddress,
                            String userAgent) {
 
-        // Fetch previous hash for chain continuity
-        String prevHash = auditLogRepository.findLatestEntry()
-                .map(AuditLog::getEntryHash)
+        // Fetch previous hash for chain continuity (native query — avoids loading full entity)
+        String prevHash = auditLogRepository.findLatestEntryHash()
                 .orElse("GENESIS");
 
         AuditLog entry = AuditLog.builder()

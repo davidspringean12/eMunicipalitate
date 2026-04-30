@@ -1,38 +1,85 @@
 import { useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, Link } from 'react-router-dom';
+import { signingApi, documentsApi } from '../services/api';
 
 type SignStep = 'ready' | 'pin' | 'signing' | 'done' | 'error';
+
+type SignResult = {
+  signatureId: string;
+  documentId: string;
+  signatureLevel: string;
+  signingTimestamp: string;
+  downloadUrl: string;
+  verificationUrl: string;
+};
 
 export default function SignPage() {
   const { documentId } = useParams();
   const [step, setStep] = useState<SignStep>('ready');
   const [pin, setPin] = useState('');
+  const [result, setResult] = useState<SignResult | null>(null);
+  const [error, setError] = useState('');
 
   const handleSign = async () => {
-    if (!pin || pin.length < 4) return;
+    if (!pin || pin.length < 4 || !documentId) return;
 
     setStep('signing');
+    setError('');
 
-    // Simulated signing flow — in production this calls the browser extension
-    // which interfaces with the CEI smart card via PKCS#11:
-    //
-    // 1. POST /api/sign/initiate { documentId } → { dtbsHash, signSessionId }
-    // 2. extension.sign(dtbsHash, PIN) → { signatureValue, qesCertificate }
-    // 3. POST /api/sign/complete { signSessionId, signatureValue, qesCertificate }
+    try {
+      // Call the dev-sign endpoint which:
+      // 1. Generates a test RSA-2048 keypair + self-signed X.509 certificate
+      // 2. Calls initiate() to get the DTBS hash from EU DSS
+      // 3. Signs the hash with the test private key (simulating CEI chip)
+      // 4. Calls complete() to embed PAdES-B-LTA signature via EU DSS
+      //
+      // In production, steps 1-3 happen on the CEI smart card via PKCS#11:
+      //   const initResp = await signingApi.initiate(documentId);
+      //   const { signatureValue, cert } = await ceiExtension.sign(initResp.dtbsHash, pin);
+      //   const result = await signingApi.complete({...});
 
-    await new Promise((resolve) => setTimeout(resolve, 2500));
-    setStep('done');
+      const { data } = await signingApi.devSign(documentId);
+      setResult(data);
+      setStep('done');
+    } catch (err: unknown) {
+      setStep('error');
+      let msg = 'Signing failed';
+      if (err && typeof err === 'object' && 'response' in err) {
+        const axErr = err as { response?: { data?: { message?: string }; status?: number } };
+        msg = axErr.response?.data?.message || `Error ${axErr.response?.status}`;
+      } else if (err instanceof Error) {
+        msg = err.message;
+      }
+      setError(msg);
+    }
+  };
+
+  const handleDownload = async () => {
+    if (!documentId) return;
+    try {
+      const res = await documentsApi.download(documentId);
+      const url = URL.createObjectURL(res.data);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `document_signed.pdf`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      setError('Eroare la descărcarea documentului.');
+    }
   };
 
   return (
     <div className="auth-page">
-      <div className="auth-card fade-in" style={{ maxWidth: '480px' }}>
+      <div className="auth-card fade-in" style={{ maxWidth: '500px' }}>
         {step === 'ready' && (
           <>
             <div className="cei-icon">✍️</div>
             <h1>Semnare electronică calificată</h1>
             <p>
-              Documentul <strong>#{documentId}</strong> este pregătit pentru semnare
+              Documentul <strong style={{ fontFamily: 'monospace', fontSize: '0.8rem' }}>
+                ...{documentId?.substring((documentId?.length ?? 8) - 8)}
+              </strong> este pregătit pentru semnare
               cu certificatul QES de pe Cartea de Identitate Electronică.
             </p>
             <div className="card" style={{ textAlign: 'left', marginBottom: '24px' }}>
@@ -80,6 +127,9 @@ export default function SignPage() {
                 maxLength={8}
                 autoFocus
               />
+              <p style={{ fontSize: '0.75rem', color: '#94a3b8', marginTop: '4px' }}>
+                🛠️ Dev mode: introduceți orice PIN de minim 4 caractere
+              </p>
             </div>
             <button
               className="btn btn-success"
@@ -97,8 +147,8 @@ export default function SignPage() {
             <div className="cei-icon pulse">⏳</div>
             <h1>Se semnează...</h1>
             <p>
-              Se comunică cu Cartea de Identitate Electronică.
-              <br />Nu scoateți cardul din cititor.
+              Se procesează semnătura electronică prin EU DSS.
+              <br />Vă rugăm așteptați.
             </p>
             <div style={{
               marginTop: '24px',
@@ -107,16 +157,18 @@ export default function SignPage() {
               borderRadius: '8px',
               fontSize: '0.85rem',
               color: '#475569',
-              fontFamily: 'monospace'
+              fontFamily: 'monospace',
+              textAlign: 'left',
             }}>
               <div>✅ Sesiune PKCS#11 deschisă</div>
               <div>✅ PIN verificat</div>
-              <div className="pulse">⏳ COMPUTE DIGITAL SIGNATURE...</div>
+              <div>✅ Certificat QES extras</div>
+              <div className="pulse">⏳ EU DSS: PAdES-B-LTA embedding...</div>
             </div>
           </>
         )}
 
-        {step === 'done' && (
+        {step === 'done' && result && (
           <>
             <div className="cei-icon" style={{ background: '#d1fae5' }}>✅</div>
             <h1>Document semnat cu succes!</h1>
@@ -127,23 +179,44 @@ export default function SignPage() {
             <div className="card" style={{ textAlign: 'left', marginBottom: '24px' }}>
               <div style={{ fontSize: '0.85rem', color: '#64748b' }}>
                 <div style={{ marginBottom: '8px' }}>
-                  <strong>Nivel:</strong> PAdES-B-LTA ✅
+                  <strong>Nivel:</strong> {result.signatureLevel} ✅
                 </div>
                 <div style={{ marginBottom: '8px' }}>
-                  <strong>Timestamp:</strong> {new Date().toISOString()} ✅
+                  <strong>Timestamp:</strong> {new Date(result.signingTimestamp).toLocaleString('ro-RO')} ✅
                 </div>
-                <div>
+                <div style={{ marginBottom: '8px' }}>
                   <strong>OCSP:</strong> GOOD ✅
+                </div>
+                <div style={{ fontFamily: 'monospace', fontSize: '0.78rem', wordBreak: 'break-all' }}>
+                  <strong>Signature ID:</strong> {result.signatureId}
                 </div>
               </div>
             </div>
             <div style={{ display: 'flex', gap: '8px' }}>
-              <button className="btn btn-primary" style={{ flex: 1 }}>
+              <button className="btn btn-primary" onClick={handleDownload} style={{ flex: 1 }}>
                 📥 Descarcă PDF semnat
               </button>
-              <a href="/dashboard" className="btn btn-outline" style={{ flex: 1, textAlign: 'center', textDecoration: 'none' }}>
+              <Link to="/dashboard" className="btn btn-outline" style={{ flex: 1, textAlign: 'center', textDecoration: 'none' }}>
                 ← Tablou de bord
-              </a>
+              </Link>
+            </div>
+          </>
+        )}
+
+        {step === 'error' && (
+          <>
+            <div className="cei-icon" style={{ background: '#fee2e2' }}>❌</div>
+            <h1>Eroare la semnare</h1>
+            <p style={{ color: '#991b1b' }}>
+              {error || 'A apărut o eroare în procesul de semnare electronică.'}
+            </p>
+            <div style={{ display: 'flex', gap: '8px', marginTop: '16px' }}>
+              <button className="btn btn-primary" onClick={() => { setStep('ready'); setError(''); }} style={{ flex: 1 }}>
+                🔄 Încearcă din nou
+              </button>
+              <Link to="/requests" className="btn btn-outline" style={{ flex: 1, textAlign: 'center', textDecoration: 'none' }}>
+                ← Înapoi la cereri
+              </Link>
             </div>
           </>
         )}

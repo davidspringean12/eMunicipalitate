@@ -6,6 +6,7 @@ type RequestData = {
   id: string;
   serviceType: string;
   status: string;
+  citizenName: string;
   submittedAt: string | null;
   createdAt: string;
 };
@@ -26,9 +27,14 @@ const STATUS_LABELS: Record<string, { label: string; css: string }> = {
 };
 
 export default function RequestsPage() {
+  const role = localStorage.getItem('role') || 'CITIZEN';
+  const isCitizen = role === 'CITIZEN';
+  const isClerk = role === 'CLERK' || role === 'ADMIN';
+
   const [showForm, setShowForm] = useState(false);
   const [requests, setRequests] = useState<RequestData[]>([]);
   const [loading, setLoading] = useState(true);
+  const [viewMode, setViewMode] = useState<'my' | 'pending'>(isCitizen ? 'my' : 'pending');
 
   // Form state
   const [serviceType, setServiceType] = useState('');
@@ -39,7 +45,14 @@ export default function RequestsPage() {
   const fetchRequests = async () => {
     try {
       setLoading(true);
-      const { data } = await requestsApi.findMy(0);
+      let data;
+      if (viewMode === 'pending') {
+        const res = await requestsApi.findPending(0);
+        data = res.data;
+      } else {
+        const res = await requestsApi.findMy(0);
+        data = res.data;
+      }
       setRequests(data.content);
     } catch (err) {
       console.error('Failed to fetch requests', err);
@@ -50,7 +63,7 @@ export default function RequestsPage() {
 
   useEffect(() => {
     fetchRequests();
-  }, []);
+  }, [viewMode]);
 
   const handleSubmit = async () => {
     if (!serviceType) {
@@ -70,7 +83,8 @@ export default function RequestsPage() {
       setShowForm(false);
       setServiceType('');
       setDescription('');
-      fetchRequests(); // Refresh table
+      setViewMode('my');
+      fetchRequests();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Eroare la crearea cererii';
       setError(msg);
@@ -78,6 +92,11 @@ export default function RequestsPage() {
       setSubmitting(false);
     }
   };
+
+  const pageTitle = viewMode === 'pending' ? 'Cereri în așteptare' : 'Cererile mele';
+  const pageDesc = viewMode === 'pending'
+    ? 'Cereri depuse de cetățeni care așteaptă procesare'
+    : 'Vizualizați și gestionați cererile pentru servicii municipale';
 
   return (
     <div className="app-layout">
@@ -87,25 +106,46 @@ export default function RequestsPage() {
           <span>eMunicipalitate</span>
         </div>
         <nav>
-          <a href="/dashboard">📊 Tablou de bord</a>
-          <a href="/requests" className="active">📋 Cererile mele</a>
-          <a href="#" onClick={(e) => { e.preventDefault(); setShowForm(true); }}>
-            📤 Depune cerere
+          <Link to="/dashboard">📊 Tablou de bord</Link>
+          <a
+            href="#"
+            className={viewMode === 'my' ? 'active' : ''}
+            onClick={(e) => { e.preventDefault(); setViewMode('my'); }}
+          >
+            📋 Cererile mele
           </a>
-          <a href="/dashboard">📄 Documente</a>
+          {isCitizen && (
+            <a href="#" onClick={(e) => { e.preventDefault(); setShowForm(true); }}>
+              📤 Depune cerere
+            </a>
+          )}
+          {isClerk && (
+            <a
+              href="#"
+              className={viewMode === 'pending' ? 'active' : ''}
+              onClick={(e) => { e.preventDefault(); setViewMode('pending'); }}
+            >
+              👥 Cereri în așteptare
+            </a>
+          )}
         </nav>
+        <div style={{ marginTop: 'auto', fontSize: '0.78rem', opacity: 0.5 }}>
+          eIDAS LoA4 · PAdES-B-LTA
+        </div>
       </aside>
 
       <main className="app-main">
         <div className="page-header fade-in">
-          <h1>Cererile mele</h1>
-          <p>Vizualizați și gestionați cererile pentru servicii municipale</p>
+          <h1>{pageTitle}</h1>
+          <p>{pageDesc}</p>
         </div>
 
         <div style={{ display: 'flex', gap: '16px', marginBottom: '24px' }} className="fade-in">
-          <button className="btn btn-primary" onClick={() => setShowForm(!showForm)}>
-            + Cerere nouă
-          </button>
+          {isCitizen && (
+            <button className="btn btn-primary" onClick={() => setShowForm(!showForm)}>
+              + Cerere nouă
+            </button>
+          )}
           <button className="btn btn-outline" onClick={fetchRequests}>
             🔄 Reîmprospătare
           </button>
@@ -168,6 +208,7 @@ export default function RequestsPage() {
               <thead>
                 <tr>
                   <th>ID</th>
+                  {viewMode === 'pending' && <th>Cetățean</th>}
                   <th>Tip serviciu</th>
                   <th>Status</th>
                   <th>Data Creării</th>
@@ -176,15 +217,20 @@ export default function RequestsPage() {
               </thead>
               <tbody>
                 {loading ? (
-                  <tr><td colSpan={5} style={{textAlign: 'center'}}>Se încarcă...</td></tr>
+                  <tr><td colSpan={viewMode === 'pending' ? 6 : 5} style={{textAlign: 'center'}}>Se încarcă...</td></tr>
                 ) : requests.length === 0 ? (
-                  <tr><td colSpan={5} style={{textAlign: 'center'}}>Nu aveți nicio cerere momentan.</td></tr>
+                  <tr><td colSpan={viewMode === 'pending' ? 6 : 5} style={{textAlign: 'center'}}>
+                    {viewMode === 'pending' ? 'Nu există cereri în așteptare.' : 'Nu aveți nicio cerere momentan.'}
+                  </td></tr>
                 ) : (
                   requests.map((req) => (
                     <tr key={req.id}>
                       <td style={{ fontFamily: 'monospace', fontSize: '0.85rem' }}>
                         ...{req.id.substring(req.id.length - 8)}
                       </td>
+                      {viewMode === 'pending' && (
+                        <td>{req.citizenName}</td>
+                      )}
                       <td>{SERVICE_LABELS[req.serviceType] || req.serviceType}</td>
                       <td>
                         <span className={`badge ${STATUS_LABELS[req.status]?.css || ''}`}>
@@ -196,11 +242,6 @@ export default function RequestsPage() {
                         <Link to={`/requests/${req.id}`} className="btn btn-outline" style={{ marginRight: '4px', fontSize: '0.8rem', padding: '4px 8px', textDecoration: 'none' }}>
                           Detalii
                         </Link>
-                        {req.status === 'APPROVED' && (
-                          <a href={`/sign/${req.id}`} className="btn btn-success" style={{ fontSize: '0.8rem', padding: '4px 8px' }}>
-                            ✍️ Semnează
-                          </a>
-                        )}
                       </td>
                     </tr>
                   ))
